@@ -90,7 +90,7 @@ variable "users" {
 variable "default_escalation_policy" {
   description = "Default escalation policy to use if service doesn't specify one"
   type        = string
-  default     = "backend_default"
+  default     = null
 }
 
 variable "integration_type" {

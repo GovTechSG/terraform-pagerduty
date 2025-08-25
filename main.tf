@@ -58,6 +58,15 @@ resource "pagerduty_escalation_policy" "policies" {
   }
 }
 
+# Data source for any escalation policy referenced by services but not defined locally
+data "pagerduty_escalation_policy" "external_policies" {
+  for_each = toset([
+    for service_key, service in var.services : service.escalation_policy
+    if service.escalation_policy != null && !contains(keys(var.escalation_policies), service.escalation_policy)
+  ])
+  name = each.value
+}
+
 # Create services
 resource "pagerduty_service" "services" {
   for_each = var.services
@@ -66,9 +75,23 @@ resource "pagerduty_service" "services" {
   description             = each.value.description
   auto_resolve_timeout    = 14400 # 4 hours
   acknowledgement_timeout = 1800  # 30 minutes
-  escalation_policy = pagerduty_escalation_policy.policies[
-    coalesce(each.value.escalation_policy, var.default_escalation_policy)
-  ].id
+
+  escalation_policy = (
+    # If escalation_policy is specified and exists locally, use local policy
+    each.value.escalation_policy != null && contains(keys(var.escalation_policies), each.value.escalation_policy)
+    ? pagerduty_escalation_policy.policies[each.value.escalation_policy].id
+    # If escalation_policy is specified but not local, use external data source
+    : each.value.escalation_policy != null
+    ? data.pagerduty_escalation_policy.external_policies[each.value.escalation_policy].id
+    # If no escalation_policy specified and default exists locally, use default
+    : var.default_escalation_policy != null && contains(keys(var.escalation_policies), var.default_escalation_policy)
+    ? pagerduty_escalation_policy.policies[var.default_escalation_policy].id
+    # If default is external, look it up
+    : var.default_escalation_policy != null
+    ? data.pagerduty_escalation_policy.external_policies[var.default_escalation_policy].id
+    # This should not happen if configuration is correct
+    : null
+  )
 
   # Auto-pause incident notifications if too many created
   incident_urgency_rule {
@@ -96,6 +119,17 @@ resource "pagerduty_business_service" "business_services" {
   team             = each.value.team_name != null ? pagerduty_team.teams[each.value.team_name].id : null
 }
 
+# Data source for any services referenced in dependencies but not defined locally
+data "pagerduty_service" "external_services" {
+  for_each = toset(flatten([
+    for service_key, service in var.services : [
+      for dep in service.dependencies : dep
+      if !contains(keys(var.services), dep)
+    ]
+  ]))
+  name = each.value
+}
+
 # Create service dependencies
 resource "pagerduty_service_dependency" "dependencies" {
   # Flatten the dependencies to create individual dependency relationships
@@ -117,7 +151,7 @@ resource "pagerduty_service_dependency" "dependencies" {
       type = "service"
     }
     supporting_service {
-      id   = pagerduty_service.services[each.value.supporting_key].id
+      id   = contains(keys(var.services), each.value.supporting_key) ? pagerduty_service.services[each.value.supporting_key].id : data.pagerduty_service.external_services[each.value.supporting_key].id
       type = "service"
     }
   }
