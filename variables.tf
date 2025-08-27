@@ -18,6 +18,80 @@ variable "services" {
     team_name         = optional(string, null)
     escalation_policy = optional(string, null)
     dependencies      = optional(list(string), []) # List of service keys this service depends on
+
+    # Service-specific event rules configuration
+    event_rules = optional(list(object({
+      name     = string
+      position = number
+      disabled = optional(bool, false)
+
+      # Conditions to match SNS payload
+      conditions = object({
+        operator = string # "and" or "or"
+        subconditions = list(object({
+          operator = string # "contains", "equals", "matches", etc.
+          parameter = object({
+            value = string
+            path  = string # e.g., "payload.severity", "payload.priority"
+          })
+        }))
+      })
+
+      # Actions to take when conditions match
+      actions = object({
+        priority = optional(string)      # "P1", "P2", "P3", "P4", "P5"
+        annotate = optional(string)      # Add annotation
+        suppress = optional(bool, false) # Suppress the alert
+
+        # Time-based suppression
+        suppress_config = optional(object({
+          threshold_value       = number
+          threshold_time_unit   = string # "minutes", "hours"
+          threshold_time_amount = number
+        }))
+      })
+
+      # Optional time frame restrictions
+      time_frame = optional(object({
+        scheduled_weekly = object({
+          weekdays   = list(number) # 1-7 (Monday-Sunday)
+          start_time = string       # "09:00:00"
+          duration   = number       # Duration in seconds
+          timezone   = string       # "Asia/Singapore"
+        })
+      }))
+    })), [])
+
+    # Service-specific urgency configuration
+    urgency_config = optional(object({
+      type = string # "constant" or "use_support_hours"
+
+      # For constant urgency
+      urgency = optional(string) # "high" or "low"
+
+      # For support hours based urgency
+      during_support_hours = optional(object({
+        type    = string
+        urgency = string
+      }))
+
+      outside_support_hours = optional(object({
+        type    = string
+        urgency = string
+      }))
+
+      # Support hours definition
+      support_hours = optional(object({
+        type         = string       # "fixed_time_per_day"
+        time_zone    = string       # "Asia/Singapore"
+        start_time   = string       # "09:00:00"
+        end_time     = string       # "17:00:00"
+        days_of_week = list(number) # [1,2,3,4,5] for weekdays
+      }))
+      }), {
+      type    = "constant"
+      urgency = "high"
+    })
   }))
   default = {}
 }

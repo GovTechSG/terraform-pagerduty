@@ -93,10 +93,41 @@ resource "pagerduty_service" "services" {
     : null
   )
 
-  # Auto-pause incident notifications if too many created
+  # Service-specific incident urgency rules
   incident_urgency_rule {
-    type    = "constant"
-    urgency = "high"
+    type = each.value.urgency_config.type
+
+    # For constant urgency
+    urgency = each.value.urgency_config.type == "constant" ? each.value.urgency_config.urgency : null
+
+    # For support hours based urgency
+    dynamic "during_support_hours" {
+      for_each = each.value.urgency_config.type == "use_support_hours" && each.value.urgency_config.during_support_hours != null ? [each.value.urgency_config.during_support_hours] : []
+      content {
+        type    = during_support_hours.value.type
+        urgency = during_support_hours.value.urgency
+      }
+    }
+
+    dynamic "outside_support_hours" {
+      for_each = each.value.urgency_config.type == "use_support_hours" && each.value.urgency_config.outside_support_hours != null ? [each.value.urgency_config.outside_support_hours] : []
+      content {
+        type    = outside_support_hours.value.type
+        urgency = outside_support_hours.value.urgency
+      }
+    }
+  }
+
+  # Service-specific support hours
+  dynamic "support_hours" {
+    for_each = each.value.urgency_config.support_hours != null ? [each.value.urgency_config.support_hours] : []
+    content {
+      type         = support_hours.value.type
+      time_zone    = support_hours.value.time_zone
+      start_time   = support_hours.value.start_time
+      end_time     = support_hours.value.end_time
+      days_of_week = support_hours.value.days_of_week
+    }
   }
 }
 
@@ -107,6 +138,89 @@ resource "pagerduty_service_integration" "integrations" {
   name    = "${each.value.name}-sns-integration"
   service = pagerduty_service.services[each.key].id
   vendor  = data.pagerduty_vendor.aws_cloudwatch.id
+}
+
+# Create service-specific event rules
+resource "pagerduty_service_event_rule" "service_rules" {
+  # Flatten the event rules to create individual rule resources
+  for_each = {
+    for pair in flatten([
+      for service_key, service in var.services : [
+        for rule_index, rule in service.event_rules : {
+          service_key = service_key
+          rule_index  = rule_index
+          rule        = rule
+          key         = "${service_key}_rule_${rule_index}"
+        }
+      ]
+    ]) : pair.key => pair
+  }
+
+  service  = pagerduty_service.services[each.value.service_key].id
+  position = each.value.rule.position
+  disabled = each.value.rule.disabled
+
+  # Build conditions block
+  conditions {
+    operator = each.value.rule.conditions.operator
+
+    dynamic "subconditions" {
+      for_each = each.value.rule.conditions.subconditions
+      content {
+        operator = subconditions.value.operator
+        parameter {
+          value = subconditions.value.parameter.value
+          path  = subconditions.value.parameter.path
+        }
+      }
+    }
+  }
+
+  # Build actions block
+  actions {
+    # Set priority if specified
+    dynamic "priority" {
+      for_each = each.value.rule.actions.priority != null ? [each.value.rule.actions.priority] : []
+      content {
+        value = priority.value
+      }
+    }
+
+    # Add annotation if specified
+    dynamic "annotate" {
+      for_each = each.value.rule.actions.annotate != null ? [each.value.rule.actions.annotate] : []
+      content {
+        value = annotate.value
+      }
+    }
+
+    # Suppress alerts if specified
+    dynamic "suppress" {
+      for_each = each.value.rule.actions.suppress ? [1] : []
+      content {
+        value                 = true
+        threshold_value       = each.value.rule.actions.suppress_config != null ? each.value.rule.actions.suppress_config.threshold_value : null
+        threshold_time_unit   = each.value.rule.actions.suppress_config != null ? each.value.rule.actions.suppress_config.threshold_time_unit : null
+        threshold_time_amount = each.value.rule.actions.suppress_config != null ? each.value.rule.actions.suppress_config.threshold_time_amount : null
+      }
+    }
+  }
+
+  # Add time frame restrictions if specified
+  dynamic "time_frame" {
+    for_each = each.value.rule.time_frame != null ? [each.value.rule.time_frame] : []
+    content {
+      dynamic "scheduled_weekly" {
+        for_each = time_frame.value.scheduled_weekly != null ? [time_frame.value.scheduled_weekly] : []
+        content {
+          weekdays   = scheduled_weekly.value.weekdays
+          start_time = scheduled_weekly.value.start_time
+          duration   = scheduled_weekly.value.duration
+          timezone   = scheduled_weekly.value.timezone
+        }
+      }
+    }
+  }
 }
 
 # Create business services (high-level business functions)
