@@ -53,6 +53,9 @@ module "sns_topics" {
   name         = each.value
   display_name = local.is_service_based ? "${title(replace(each.key, "_", " "))} Service Alerts - ${upper(var.stage)}" : "${title(replace(each.key, "_", " "))} Alerts - ${upper(var.stage)}"
 
+  # Disable the default policy creation to avoid conflicts
+  create_topic_policy = false
+
   # Configure delivery feedback for CloudWatch logging
   http_feedback = var.enable_cloudwatch_logging ? {
     success_role_arn    = aws_iam_role.sns_delivery_status[0].arn
